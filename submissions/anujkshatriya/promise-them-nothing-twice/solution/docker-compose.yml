@@ -1,0 +1,71 @@
+services:
+
+  # ── Shared state ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"       # exposed so the harness can FLUSHDB / seed buckets directly
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Application nodes (stateless, all share the same Redis) ──────────────────
+  node1:
+    build:
+      context: .            # solution/ — lets the Dockerfile reach both app/ and config/
+      dockerfile: app/Dockerfile
+    environment:
+      NODE_ID:               node-1
+      PORT:                  "3000"
+      REDIS_URL:             redis://redis:6379
+      CONFIG_PATH:           /app/config/policies.yaml
+      RATE_LIMIT_TEST_MODE:  "true"   # enables X-Test-Time-Ms header for harness scenarios
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  node2:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    environment:
+      NODE_ID:               node-2
+      PORT:                  "3000"
+      REDIS_URL:             redis://redis:6379
+      CONFIG_PATH:           /app/config/policies.yaml
+      RATE_LIMIT_TEST_MODE:  "true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  node3:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    environment:
+      NODE_ID:               node-3
+      PORT:                  "3000"
+      REDIS_URL:             redis://redis:6379
+      CONFIG_PATH:           /app/config/policies.yaml
+      RATE_LIMIT_TEST_MODE:  "true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Load balancer ─────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"           # harness and manual testing hit this
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - node1
+      - node2
+      - node3
+    restart: unless-stopped

@@ -1,0 +1,22 @@
+tiers:
+  starter:   { rpm: 60,  capacity: 60 }
+  growth:    { rpm: 300, capacity: 300 }
+
+customers:
+  acme:       { tier: growth }
+  globex:     { tier: growth }
+  northwind:  { tier: growth }
+
+overrides:
+  - id: northwind-nightly-batch
+    customer_id: northwind
+    rpm: 1500
+    capacity: 1500
+    schedule:
+      start: "02:00"
+      end:   "04:00"
+      timezone: "UTC"
+    reason: "Approved nightly batch workload — commercial bridge"
+    approved_by: "priya.nair@relayapi"
+    ticket: "OPS-4471"
+    expires: "2026-06-01T00:00:00Z"

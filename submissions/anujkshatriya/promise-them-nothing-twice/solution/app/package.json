@@ -1,0 +1,22 @@
+{
+  "name": "relay-api-rate-limiter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ioredis": "^5.3.2",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "supertest": "^7.0.0",
+    "testcontainers": "^10.0.0"
+  },
+  "jest": {
+    "testMatch": ["**/test/**/*.test.js"],
+    "testTimeout": 30000
+  }
+}
