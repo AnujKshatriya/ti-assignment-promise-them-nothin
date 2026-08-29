@@ -18,6 +18,8 @@ const { createPingHandler }        = require('./routes/ping');
  * @param {{ config, limiter, timeSource, nodeId: string }} deps
  */
 function createApp({ config, limiter, timeSource, nodeId }) {
+  // Stateless API: customers identified via X-Customer-Id; no cookie/session auth, so CSRF is N/A.
+  // nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage
   const app = express();
 
   const rateLimitMiddleware = createRateLimitMiddleware({ config, limiter, timeSource });

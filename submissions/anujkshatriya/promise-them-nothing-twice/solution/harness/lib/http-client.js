@@ -1,7 +1,10 @@
 'use strict';
 
+// Local integration harness: targets Docker Nginx on localhost; HTTPS not configured for prototype.
+// nosemgrep: problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
 const http = require('http');
 
+// nosemgrep: problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
 const agent = new http.Agent({
   keepAlive: true,
   keepAliveMsecs: 1000,
@@ -31,6 +34,7 @@ function makeRequest(options, testTimeMs = null) {
       requestOptions.headers['X-Test-Time-Ms'] = String(testTimeMs);
     }
 
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.http-request.http-request
     const req = http.request(requestOptions, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
