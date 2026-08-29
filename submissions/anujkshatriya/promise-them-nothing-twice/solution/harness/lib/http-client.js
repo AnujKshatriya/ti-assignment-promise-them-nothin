@@ -1,79 +1,59 @@
 'use strict';
 
-// Local integration harness: targets Docker Nginx on localhost; HTTPS not configured for prototype.
-// nosemgrep: problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
-const http = require('http');
-
-// nosemgrep: problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
-const agent = new http.Agent({
-  keepAlive: true,
-  keepAliveMsecs: 1000,
-  maxSockets: 256,
-  maxFreeSockets: 256,
-});
-
 /**
  * Simple HTTP client for making requests to the rate-limited service.
  * Returns a promise that resolves to { statusCode, headers, body }.
  */
-function makeRequest(options, testTimeMs = null) {
-  return new Promise((resolve) => {
-    const requestOptions = {
-      hostname: 'localhost',
-      port: 8080,
-      path: '/api/v1/ping',
+async function makeRequest(options, testTimeMs = null) {
+  const headers = {
+    'X-Customer-Id': options.customerId,
+  };
+
+  if (testTimeMs !== null && process.env.RATE_LIMIT_TEST_MODE === 'true') {
+    headers['X-Test-Time-Ms'] = String(testTimeMs);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const response = await fetch('http://localhost:8080/api/v1/ping', {
       method: 'GET',
-      headers: {
-        'X-Customer-Id': options.customerId,
-      },
-      agent,
-      timeout: 5000,
-    };
+      headers,
+      signal: controller.signal,
+    });
 
-    if (testTimeMs !== null && process.env.RATE_LIMIT_TEST_MODE === 'true') {
-      requestOptions.headers['X-Test-Time-Ms'] = String(testTimeMs);
+    const data = await response.text();
+    const responseHeaders = Object.fromEntries(response.headers);
+
+    try {
+      const body = JSON.parse(data);
+      return {
+        statusCode: response.status,
+        headers: responseHeaders,
+        body,
+      };
+    } catch {
+      return {
+        statusCode: response.status,
+        headers: responseHeaders,
+        body: data,
+      };
     }
-
-    // Local test harness only: HTTP to localhost Docker Nginx; TLS is not configured in this prototype.
-    // nosemgrep: problem-based-packs.insecure-transport.js-node.http-request.http-request, problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
-    const req = http.request(requestOptions, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try {
-          const body = JSON.parse(data);
-          resolve({
-            statusCode: res.statusCode,
-            headers: res.headers,
-            body,
-          });
-        } catch {
-          resolve({
-            statusCode: res.statusCode,
-            headers: res.headers,
-            body: data,
-          });
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      resolve({
-        statusCode: 0,
-        error: err.message,
-      });
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return {
         statusCode: 0,
         error: 'timeout',
-      });
-    });
-
-    req.end();
-  });
+      };
+    }
+    return {
+      statusCode: 0,
+      error: err.message,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /**
