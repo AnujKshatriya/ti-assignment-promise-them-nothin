@@ -244,4 +244,24 @@ overrides: []
 `;
     expect(() => parseConfig(yaml)).toThrow(/missing "tier"/);
   });
+
+  test('throws when override timezone is not UTC', () => {
+    const yaml = `
+tiers:
+  growth: { rpm: 300, capacity: 300 }
+customers:
+  acme: { tier: growth }
+overrides:
+  - id: test
+    customer_id: acme
+    rpm: 1000
+    capacity: 1000
+    schedule: { start: "02:00", end: "04:00", timezone: "America/New_York" }
+    reason: "Test"
+    approved_by: "admin"
+    ticket: "T-1"
+    expires: "2030-01-01T00:00:00Z"
+`;
+    expect(() => parseConfig(yaml)).toThrow(/Multi-timezone support is future work/);
+  });
 });

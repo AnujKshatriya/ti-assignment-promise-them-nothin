@@ -107,6 +107,11 @@ This trades service availability for correctness—an acceptable tradeoff given 
 - Silently ignored in any other configuration (production never sees this header).
 - Critical for deterministic testing of the 02:00/04:00 boundary without waiting real wall-clock time.
 
+**Timezone (UTC-only):**
+- Override schedules are currently UTC-only. The resolver uses UTC time-of-day.
+- `override.schedule.timezone` is required and must be exactly `"UTC"` (validated by the config loader).
+- Multi-timezone support is future work; the prototype does not claim arbitrary timezone support.
+
 ## Policy Transitions
 
 Buckets are **preserved** across policy changes; capacity is **clamped** on downshift.
@@ -122,20 +127,38 @@ The Lua script handles this naturally: it always clamps to the *currently effect
 
 ## Verification: What Has Been Tested
 
-**Automated tests:** 66/66 passing.
+**Automated tests:** 67/67 passing.
 - **Policy resolver (14 tests):** base tiers, override activation, all four half-open boundary instants (01:59:59.999, 02:00:00.000, 03:59:59.999, 04:00:00.000), expired overrides, refill rate arithmetic.
-- **Config loader (19 tests):** valid configs, all missing required fields, tier references, duplicate IDs, date parsing, HH:MM format.
+- **Config loader (20 tests):** valid configs, all missing required fields, tier references, duplicate IDs, date parsing, HH:MM format, override timezone must be `"UTC"`.
 - **Redis/Lua (14 tests):** allow/deny, remaining count, partial refill, elapsed-time calculation, capacity invariant, capacity clamp on downshift, atomicity under 50 concurrent requests, customer isolation.
 - **HTTP middleware (19 tests):** 200 OK with headers, 429 with Retry-After, 503 on Redis failure (never 429 for infrastructure failure), 400 for missing/unknown customer, X-Test-Time-Ms gating, policy headers (Northwind override inside/outside window).
 
 **Distributed smoke test (manual, verified):**
-- Three nodes served traffic in round-robin.
+- Three nodes served traffic in round-robin through Nginx.
 - Shared Redis counter decremented globally (not per-node).
+- Requests on different nodes consume the same logical customer bucket.
 - Exact token exhaustion: seeded 2 tokens at frozen clock, sent 5 requests—exactly 2 allowed, 3 denied with correct `retry_after_ms: 200`.
+- Retry-After behavior verified on denied requests.
+
+**Load-testing harness (end-to-end, verified):**
+- Implemented under `solution/harness/`. Executes all nine PRD §15 scenarios against the live Docker Compose stack (Nginx → three Node nodes → shared Redis).
+- Resets/seeds Redis between scenarios where needed. Sends HTTP requests through Nginx. Uses `X-Test-Time-Ms` only when `RATE_LIMIT_TEST_MODE=true`.
+- Checks status codes, remaining tokens, retry behavior, policy transitions, distributed behavior, contention, and fairness. Prints per-scenario results and an aggregate summary. Exits with code 0 when all scenarios pass, non-zero when any scenario fails.
+- **Result: 9/9 scenarios PASS.**
+  1. Basic Quota — PASS
+  2. Customer Isolation — PASS
+  3. Distributed Correctness — PASS
+  4. Concurrent Contention — PASS
+  5. Fairness — PASS
+  6. Northwind Override Activation — PASS
+  7. Boundary – Half-Open Interval — PASS
+  8. Boundary – Capacity Clamp — PASS
+  9. Burst & Refill — PASS
 
 ## Known Limitations & Next Steps
 
-- **Load-testing harness not implemented yet.** The nine assignment scenarios (PRD §15) are not yet proven end-to-end; this is Phase 3, next after this checkpoint.
+- **UTC-only scheduling.** Override schedules are currently UTC-only. `timezone` is required and validated to be exactly `"UTC"`. The resolver uses UTC time-of-day. Multi-timezone support is future work.
+- **Load-testing harness complete.** All nine PRD §15 scenarios pass end-to-end (9/9). See Verification section above.
 - **Redis host port exposure** (6379) and `FLUSHDB`/seed operations are development/test conveniences. Not production-safe; production infrastructure must use different isolation.
 - **RATE_LIMIT_TEST_MODE env var** is a single switch. Production-grade systems would want stronger boundaries (separate binary or build-time removal). Called out in the README.
 - **No config hot-reload.** Config is loaded on startup. SIGHUP-based reload is future work.
@@ -144,4 +167,4 @@ The Lua script handles this naturally: it always clamps to the *currently effect
 
 ## Decisions Made Today: Summary
 
-This implementation resolves the CTO vs Support conflict via an explicitly approved, audited, time-bounded override mechanism that scales generically to any customer and any override. The token-bucket algorithm provides fair per-customer enforcement with natural burst semantics. Distributed coordination is achieved via atomic Redis Lua, eliminating per-node state and multiplication of effective quotas. Failure modes bias toward safety: Redis infrastructure failures are 503, never 429. Time is injected as a dependency, enabling deterministic testing of the critical 02:00/04:00 boundary without clock mocking. The result is a thin, correct vertical slice of a rate limiter for a real multi-node deployment.
+This implementation resolves the CTO vs Support conflict via an explicitly approved, audited, time-bounded override mechanism that scales generically to any customer and any override. The token-bucket algorithm provides fair per-customer enforcement with natural burst semantics. Distributed coordination is achieved via atomic Redis Lua, eliminating per-node state and multiplication of effective quotas. Failure modes bias toward safety: Redis infrastructure failures are 503, never 429. Time is injected as a dependency, enabling deterministic testing of the critical 02:00/04:00 boundary without clock mocking. The completed vertical slice includes policy configuration, token-bucket enforcement, Redis atomic coordination, HTTP middleware, a three-node Docker deployment behind Nginx, deterministic testing via `X-Test-Time-Ms`, 67 application tests, and nine end-to-end harness scenarios (all passing).

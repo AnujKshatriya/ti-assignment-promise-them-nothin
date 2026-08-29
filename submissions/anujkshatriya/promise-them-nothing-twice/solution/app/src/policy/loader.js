@@ -25,6 +25,12 @@ function validateOverride(override, index) {
     }
   }
 
+  if (override.schedule.timezone !== 'UTC') {
+    throw new Error(
+      `Config error: ${label}.schedule.timezone must be "UTC". Multi-timezone support is future work. Got: "${override.schedule.timezone}"`
+    );
+  }
+
   if (!HH_MM.test(override.schedule.start)) {
     throw new Error(
       `Config error: ${label}.schedule.start must be HH:MM format, got "${override.schedule.start}"`

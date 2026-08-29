@@ -48,6 +48,9 @@ A distributed, per-customer HTTP rate limiter for a fictional B2B API platform (
 
 **Three stateless nodes** talk to **one shared Redis** instance. Nginx performs round-robin load balancing with no sticky sessions.
 
+- **`config/policies.yaml`** holds static configuration only (tiers, customer assignments, overrides).
+- **Redis** stores runtime token-bucket state (`rl:<customer_id>`).
+
 ## Token Bucket Algorithm
 
 Each customer has a bucket containing tokens. On each request:
@@ -64,6 +67,18 @@ Each customer has a bucket containing tokens. On each request:
 - 300th request: bucket depleted → deny with `Retry-After: ~40s` (time to refill 1 token)
 
 **Burst behavior:** if idle for 10 seconds, the bucket refills to 300 (never beyond). A client with tokens in the bucket can consume them faster than the refill rate (burst), but idle time cannot accumulate unbounded credit.
+
+## Policy Tiers & Overrides
+
+| Tier / Policy | RPM | Capacity | Notes |
+|---|---|---|---|
+| `starter` | 60 | 60 | Base tier for new customers |
+| `growth` | 300 | 300 | Standard tier (acme, globex, northwind) |
+| `northwind-nightly-batch` (override) | 1500 | 1500 | Active [02:00, 04:00) UTC only |
+
+Override schedules are **UTC-only**. `override.schedule.timezone` is required and must be `"UTC"`. The resolver uses UTC time-of-day. Multi-timezone support is future work.
+
+At **04:00:00.000 UTC**, Northwind returns to the base growth policy (300 RPM / 300 capacity). Redis bucket state is preserved; the Lua script clamps tokens to the currently effective capacity on downshift.
 
 ## Northwind Nightly Batch Exception
 
@@ -122,6 +137,8 @@ Content-Type: application/json
 - `node`: which of the three nodes handled the request (proves distributed behavior).
 
 ### 429 Too Many Requests (quota exhausted)
+
+Returned only when Redis successfully determines that the customer's quota is exhausted.
 
 ```
 HTTP/1.1 429 Too Many Requests
@@ -194,19 +211,24 @@ solution/
 │       ├── policy.loader.test.js
 │       ├── limiter.integration.test.js
 │       └── middleware.integration.test.js
-└── config/
-    └── policies.yaml               # tier definitions, customer assignments, overrides
+├── config/
+│   └── policies.yaml               # tier definitions, customer assignments, overrides
+└── harness/
+    ├── harness.js                  # end-to-end verification runner (9 PRD §15 scenarios)
+    ├── lib/                        # HTTP client, Redis helper, reporting
+    └── scenarios/                  # one file per scenario
 ```
 
 ## Prerequisites
 
 - **Docker** (with Docker Compose v2).
-- **Node 18+** (for running tests locally without Docker).
-- **npm** (for `npm ci`, `npm test`).
+- **Node.js 18+** (for running tests and the harness locally).
+- **npm** (for `npm ci`, `npm test` in `solution/app/`).
+- Redis is provided by Docker Compose (no separate Redis install required).
 
-## Installation & Running Tests
+## Testing
 
-### 1. Install dependencies (local tests, not Docker)
+### A. Application test suite
 
 ```bash
 cd solution/app
@@ -214,15 +236,51 @@ npm ci
 npm test
 ```
 
-Runs 66 tests:
+Runs 67 tests:
 - 14 policy resolver tests (override boundaries, expiry, tier fallback).
-- 19 config loader tests (validation, required fields, date parsing).
+- 20 config loader tests (validation, required fields, date parsing, UTC-only timezone).
 - 14 Redis/Lua integration tests (atomicity, capacity clamping, concurrent requests).
 - 19 HTTP middleware tests (200/429/503 responses, headers, X-Test-Time-Ms gating).
 
-**Expected output:** `66 passed, 0 failed`.
+**Expected output:** `67 passed, 0 failed`.
 
-### 2. Start the full distributed system
+### B. Distributed smoke test
+
+Start the full stack, then verify round-robin routing and shared Redis state manually (see steps below).
+
+### C. Load-testing harness
+
+End-to-end verification of all nine PRD §15 scenarios through Nginx across the three-node deployment. **Expected result: 9/9 scenarios PASS.**
+
+```bash
+cd submissions/anujkshatriya/promise-them-nothing-twice/solution/harness
+node harness.js
+```
+
+**Prerequisite:** the Docker Compose stack must be running (`docker compose up --build -d` from `solution/`).
+
+The harness is a **verification/load-testing harness**, not a production monitoring tool or logger. It:
+- Resets/seeds Redis between scenarios where needed.
+- Sends HTTP requests through Nginx to the live deployment.
+- Uses `X-Test-Time-Ms` only when `RATE_LIMIT_TEST_MODE=true`.
+- Checks status codes, remaining tokens, retry behavior, policy transitions, distributed behavior, contention, and fairness.
+- Prints per-scenario results and an aggregate summary.
+- Exits with code 0 when all scenarios pass, non-zero when any scenario fails.
+
+**Scenarios verified (9/9 PASS):**
+1. Basic Quota
+2. Customer Isolation
+3. Distributed Correctness
+4. Concurrent Contention
+5. Fairness
+6. Northwind Override Activation
+7. Boundary – Half-Open Interval
+8. Boundary – Capacity Clamp
+9. Burst & Refill
+
+## Installation & Running the Stack
+
+### 1. Start the full distributed system
 
 ```bash
 cd solution
@@ -245,7 +303,7 @@ docker compose ps
 
 All five services should show `running`.
 
-### 3. Send a request
+### 2. Send a request
 
 ```bash
 curl -H "X-Customer-Id: acme" http://localhost:8080/api/v1/ping
@@ -259,7 +317,7 @@ Response:
 }
 ```
 
-### 4. Check rate-limit headers
+### 3. Check rate-limit headers
 
 ```bash
 curl -v -H "X-Customer-Id: acme" http://localhost:8080/api/v1/ping 2>&1 | grep -i "X-RateLimit"
@@ -272,7 +330,7 @@ X-RateLimit-Remaining: 299
 X-RateLimit-Policy: growth
 ```
 
-### 5. Exhaust the quota
+### 4. Exhaust the quota
 
 Seed the bucket to a low token count via `redis-cli`, then send requests:
 
@@ -299,7 +357,7 @@ done
 - Request 2: `429 Too Many Requests`, `Retry-After: 1` (approx 200ms until next token)
 - Request 3: `429 Too Many Requests`, same
 
-### 6. Test Northwind override (02:00–04:00 UTC window)
+### 5. Test Northwind override (02:00–04:00 UTC window)
 
 Using the `X-Test-Time-Ms` header (test-mode only) to inject a virtual timestamp:
 
@@ -346,7 +404,7 @@ The Redis port (6379) is intentionally exposed in `docker-compose.yml` so the te
 
 ## Known Limitations
 
-- **Load-testing harness not implemented yet.** The nine PRD scenarios are not yet end-to-end proven.
+- **UTC-only scheduling.** Override schedules require `timezone: "UTC"`. Multi-timezone support is future work.
 - **RATE_LIMIT_TEST_MODE is a single env var.** Stronger production boundaries (separate binary, build-time removal) are future work.
 - **No config hot-reload.** Changes to `config/policies.yaml` require restarting the nodes.
 - **No persistent audit log.** The config file is the audit trail; persistent logging is future work.
@@ -366,18 +424,3 @@ To clean up completely:
 ```bash
 docker compose down -v
 ```
-
-## Next Phase: Load-Testing Harness
-
-The nine assignment scenarios (PRD §15) are not yet implemented:
-1. Basic quota
-2. Customer isolation
-3. Distributed correctness (all 3 nodes serve 300 requests, not 900)
-4. Concurrent single-token contention
-5. Fairness
-6. Override activation
-7. Boundary: half-open interval
-8. Boundary: capacity clamp at 04:00
-9. Burst & refill
-
-These will be implemented as a first-class harness that makes correct vs incorrect behavior obvious without reading source code.
