@@ -34,8 +34,8 @@ function makeRequest(options, testTimeMs = null) {
       requestOptions.headers['X-Test-Time-Ms'] = String(testTimeMs);
     }
 
-    // nosemgrep: problem-based-packs.insecure-transport.js-node.http-request.http-request
-    const req = http.request(requestOptions, (res) => {
+    // Local test harness only: HTTP to localhost Docker Nginx; TLS not configured in prototype.
+    const req = http.request(requestOptions, (res) => { // nosemgrep: problem-based-packs.insecure-transport.js-node.http-request.http-request, problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
